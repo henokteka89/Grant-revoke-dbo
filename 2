@@ -1,0 +1,100 @@
+USE UtilityDB;
+GO
+
+CREATE PROCEDURE dbo.GenerateGrantRevokeStatements
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    -- Declare variables for output
+    DECLARE @userName NVARCHAR(128);
+    DECLARE @roleName NVARCHAR(128);
+    DECLARE @grantStatement NVARCHAR(MAX);
+    DECLARE @revokeStatement NVARCHAR(MAX);
+
+    -- Get the name of the database where this procedure was called from
+    DECLARE @currentDBName NVARCHAR(128);
+    SET @currentDBName = DB_NAME();
+
+    -- Create temporary table to store the statements
+    CREATE TABLE #Statements (
+        StatementType NVARCHAR(10),
+        SQLStatement NVARCHAR(MAX)
+    );
+
+    -- Dynamic SQL to run in the context of the calling database
+    DECLARE @sql NVARCHAR(MAX);
+
+    -- Generate statements for db_owner role
+    SET @sql = '
+    USE ' + QUOTENAME(@currentDBName) + ';
+    DECLARE @userName NVARCHAR(128);
+    DECLARE dbOwnerCursor CURSOR FOR
+    SELECT dp.name
+    FROM sys.database_role_members drm
+    JOIN sys.database_principals dp ON drm.member_principal_id = dp.principal_id
+    JOIN sys.database_principals rp ON drm.role_principal_id = rp.principal_id
+    WHERE rp.name = ''db_owner'';
+
+    OPEN dbOwnerCursor;
+    FETCH NEXT FROM dbOwnerCursor INTO @userName;
+
+    WHILE @@FETCH_STATUS = 0
+    BEGIN
+        -- Generate GRANT statement
+        INSERT INTO #Statements (StatementType, SQLStatement)
+        VALUES (''GRANT'', ''GRANT db_owner TO ['' + @userName + ''];'');
+        
+        -- Generate REVOKE statement
+        INSERT INTO #Statements (StatementType, SQLStatement)
+        VALUES (''REVOKE'', ''REVOKE db_owner FROM ['' + @userName + ''];'');
+        
+        FETCH NEXT FROM dbOwnerCursor INTO @userName;
+    END;
+
+    CLOSE dbOwnerCursor;
+    DEALLOCATE dbOwnerCursor;
+    ';
+    EXEC sp_executesql @sql;
+
+    -- Generate statements for sysadmin role
+    SET @sql = '
+    USE ' + QUOTENAME(@currentDBName) + ';
+    DECLARE @userName NVARCHAR(128);
+    DECLARE sysAdminCursor CURSOR FOR
+    SELECT sp.name
+    FROM sys.server_role_members srm
+    JOIN sys.server_principals sp ON srm.member_principal_id = sp.principal_id
+    JOIN sys.server_principals srp ON srm.role_principal_id = srp.principal_id
+    WHERE srp.name = ''sysadmin'';
+
+    OPEN sysAdminCursor;
+    FETCH NEXT FROM sysAdminCursor INTO @userName;
+
+    WHILE @@FETCH_STATUS = 0
+    BEGIN
+        -- Generate GRANT statement
+        INSERT INTO #Statements (StatementType, SQLStatement)
+        VALUES (''GRANT'', ''ALTER SERVER ROLE [sysadmin] ADD MEMBER ['' + @userName + ''];'');
+        
+        -- Generate REVOKE statement
+        INSERT INTO #Statements (StatementType, SQLStatement)
+        VALUES (''REVOKE'', ''ALTER SERVER ROLE [sysadmin] DROP MEMBER ['' + @userName + ''];'');
+        
+        FETCH NEXT FROM sysAdminCursor INTO @userName;
+    END;
+
+    CLOSE sysAdminCursor;
+    DEALLOCATE sysAdminCursor;
+    ';
+    EXEC sp_executesql @sql;
+
+    -- Output the statements
+    SELECT StatementType, SQLStatement
+    FROM #Statements
+    ORDER BY StatementType, SQLStatement;
+
+    -- Drop temporary table
+    DROP TABLE #Statements;
+END;
+GO
