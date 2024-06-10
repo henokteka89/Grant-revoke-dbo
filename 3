@@ -1,0 +1,57 @@
+
+
+CREATE PROCEDURE dbo.GenerateGrantRevokeStatements
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    -- Get the name of the database where this procedure was called from
+    DECLARE @currentDBName NVARCHAR(128);
+    SET @currentDBName = DB_NAME();
+
+    -- Create temporary table to store the statements
+    CREATE TABLE #Statements (
+        StatementType NVARCHAR(10),
+        SQLStatement NVARCHAR(MAX)
+    );
+
+    -- Dynamic SQL to generate statements for db_owner role
+    DECLARE @sql NVARCHAR(MAX);
+    SET @sql = '
+    USE ' + QUOTENAME(@currentDBName) + ';
+    
+    -- Insert GRANT and REVOKE statements for db_owner role
+    INSERT INTO #Statements (StatementType, SQLStatement)
+    SELECT 
+        ''GRANT'' AS StatementType,
+        ''GRANT db_owner TO ['' + dp.name + ''];'' AS SQLStatement
+    FROM sys.database_role_members drm
+    JOIN sys.database_principals dp ON drm.member_principal_id = dp.principal_id
+    JOIN sys.database_principals rp ON drm.role_principal_id = rp.principal_id
+    WHERE rp.name = ''db_owner'';
+
+    INSERT INTO #Statements (StatementType, SQLStatement)
+    SELECT 
+        ''REVOKE'' AS StatementType,
+        ''REVOKE db_owner FROM ['' + dp.name + ''];'' AS SQLStatement
+    FROM sys.database_role_members drm
+    JOIN sys.database_principals dp ON drm.member_principal_id = dp.principal_id
+    JOIN sys.database_principals rp ON drm.role_principal_id = rp.principal_id
+    WHERE rp.name = ''db_owner'';
+    ';
+    EXEC sp_executesql @sql;
+
+    -- Output the statements in the desired order
+    SELECT StatementType, SQLStatement
+    FROM #Statements
+    ORDER BY 
+        CASE 
+            WHEN StatementType = 'GRANT' THEN 1
+            WHEN StatementType = 'REVOKE' THEN 2
+        END,
+        SQLStatement;
+
+    -- Drop temporary table
+    DROP TABLE #Statements;
+END;
+GO
